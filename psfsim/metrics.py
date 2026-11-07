@@ -188,3 +188,45 @@ def contiguous_range(z: np.ndarray, ok: np.ndarray) -> tuple[float, float] | Non
     while hi < len(z) - 1 and ok[hi + 1]:
         hi += 1
     return float(z[lo]), float(z[hi])
+
+
+# --------------------------------------------------------------------------- #
+# Range summaries (Phase 0/1): in-range fraction and flatness over depth
+# --------------------------------------------------------------------------- #
+def range_summary(
+    z_nm: np.ndarray,
+    values: np.ndarray,
+    z_range_nm: tuple[float, float] = (-3000.0, 3000.0),
+    total: float | None = None,
+) -> dict[str, float]:
+    """
+    Summaries of one per-plane metric (e.g. EE400 or Strehl) over a depth range.
+
+    eta        in-range fraction: Integral_range v dz / total, where `total`
+               defaults to Integral v dz over the whole z grid. Pass the
+               analytic budget (RadialPSF.budgets) to measure it against the
+               infinite-range integral instead.
+    integral   Integral_range v dz (nm)
+    min, mean  over the range
+    flatness   min / mean (1 = perfectly flat)
+    cv         coefficient of variation (std / mean)
+    ceiling    total / range length: the flat value the budget would allow
+    """
+    z = np.asarray(z_nm, dtype=float)
+    v = np.asarray(values, dtype=float)
+    lo, hi = z_range_nm
+    sel = (z >= lo - 1e-9) & (z <= hi + 1e-9)
+    inside = float(np.trapezoid(v[sel], z[sel]))
+    tot = float(np.trapezoid(v, z)) if total is None else float(total)
+    vin = v[sel]
+    mean = float(vin.mean())
+    return {
+        "eta": inside / tot,
+        "integral": inside,
+        "total": tot,
+        "min": float(vin.min()),
+        "mean": mean,
+        "flatness": float(vin.min() / mean) if mean > 0 else float("nan"),
+        "cv": float(vin.std() / mean) if mean > 0 else float("nan"),
+        "ceiling": tot / (hi - lo),
+    }
