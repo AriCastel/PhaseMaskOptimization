@@ -17,9 +17,13 @@ psfsim/
   simulator.py   2D FFT forward model, PSFSimulator (was PSFsimulator.py)
   metrics.py     Strehl / EE(r_opt) / PW-M2 per plane, + range summaries (eta, flatness)
   radial.py      Phase 0: fast 1D Debye model for radially symmetric masks + depth budgets
+  objective.py   Phase 1: soft-min EE objective, Strehl / EE50 constraints, Evaluator
+  crlb.py        Phase 1: lateral CRLB of the camera-sampled PSF
 scripts/phase0_check.py   radial vs 2D cross-check and budget check
-tests/test_radial.py      Phase 0 gate as tests
+scripts/phase1_pareto.py  NSGA-II Pareto study and threshold map
+tests/                    Phase 0/1 checks
 docs/phase0_report.md     Phase 0 results
+docs/phase1_report.md     Phase 1 results (objective, thresholds)
 ```
 
 Modules marked *reconstructed* were imported by the uploaded files but missing
@@ -30,7 +34,7 @@ have the lab versions, drop them in and re-run `scripts/phase0_check.py` and
 ## Quick start
 
 ```bash
-pip install numpy scipy matplotlib pytest
+pip install numpy scipy matplotlib pytest pymoo
 ```
 
 ```python
