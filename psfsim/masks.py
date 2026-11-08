@@ -256,3 +256,92 @@ def _tilt(
     belongs in the same pipeline stage as the mask itself.
     """
     return x_waves * grid.x + y_waves * grid.y
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2: zoned mask with exact per-zone focus
+# --------------------------------------------------------------------------- #
+def _cos_theta(rho: np.ndarray, system: OpticalSystem) -> np.ndarray:
+    s = np.clip(system.sin_max * rho, 0.0, 1.0)
+    return np.sqrt(1.0 - s**2)
+
+
+def t_to_rho(t, system: OpticalSystem) -> np.ndarray:
+    """Normalised axial-frequency coordinate t = (1 - cos theta) / (1 - cos theta_max),
+    in [0, 1], to pupil radius rho. Equal steps in t are equal steps in c = cos theta,
+    i.e. equal depth of focus lambda / (n dc) per zone (the layer-cake rule)."""
+    t = np.asarray(t, dtype=float)
+    c = 1.0 - t * (1.0 - system.cos_min)
+    return np.sqrt(np.clip(1.0 - c**2, 0.0, None)) / system.sin_max
+
+
+def rho_to_t(rho, system: OpticalSystem) -> np.ndarray:
+    return (1.0 - _cos_theta(np.asarray(rho, dtype=float), system)) / (1.0 - system.cos_min)
+
+
+def equal_dc_radii(n_zones: int, system: OpticalSystem) -> tuple[float, ...]:
+    """Zone edges (rho) giving every zone the same width in c = cos theta."""
+    return tuple(float(r) for r in t_to_rho(np.arange(1, n_zones) / n_zones, system))
+
+
+@register_mask("zoned_focus")
+def _zoned_focus(
+    grid: PupilGrid,
+    system: OpticalSystem,
+    radii: tuple[float, ...] = (1 / np.sqrt(2),),
+    depths_nm: tuple[float, ...] = (-1000.0, 1000.0),
+    pistons_waves: tuple[float, ...] | None = None,
+    sweeps_nm: tuple[float, ...] | None = None,
+) -> np.ndarray:
+    """
+    Concentric zones, each focused at its own depth with EXACT (cos theta)
+    defocus, plus a free piston per zone and an optional local focus sweep.
+
+    Zone k (radii[k-1] <= rho < radii[k]) carries, in waves,
+
+        phi_k(c) = -(n / lambda) [ z_k (c - 1) + (s_k / (2 dc_k)) (c - cm_k)^2 ] + p_k
+
+    with c = cos theta, cm_k the zone's centre in c and dc_k its width in c.
+    By stationary phase the rays of zone k focus at z(c) = z_k + s_k (c - cm_k) / dc_k,
+    i.e. the zone covers depths z_k +- s_k / 2 (s_k = 0: a single focus at z_k).
+    The sign convention matches psfsim.pupil.defocus_phase, so a one-zone mask
+    with depth z_k moves the focus to z = z_k.
+
+    Because SLM zones are mutually coherent (phase is wrapped, not delayed by
+    more than the coherence length), the piston p_k sets how neighbouring foci
+    interfere and is a genuine design variable; p_0 is a global piston.
+
+    radii : N - 1 zone edges in normalised pupil radius, increasing, in (0, 1).
+        `equal_dc_radii(N, system)` gives the layer-cake (equal dc) edges.
+    depths_nm : N focus depths z_k (nm).
+    pistons_waves : N pistons (default 0).
+    sweeps_nm : N sweep lengths s_k (nm, may be negative; default 0).
+    """
+    radii = tuple(float(r) for r in radii)
+    n_z = len(radii) + 1
+    if len(depths_nm) != n_z:
+        raise ValueError(f"need len(radii) + 1 = {n_z} depths, got {len(depths_nm)}")
+    if any(b <= a for a, b in zip(radii, radii[1:])) or not all(0 < r < 1 for r in radii):
+        raise ValueError("radii must be strictly increasing and inside (0, 1)")
+    pist = np.zeros(n_z) if pistons_waves is None else np.asarray(pistons_waves, float)
+    sw = np.zeros(n_z) if sweeps_nm is None else np.asarray(sweeps_nm, float)
+    if pist.size != n_z or sw.size != n_z:
+        raise ValueError("pistons_waves and sweeps_nm need one entry per zone")
+
+    k_n = system.n_medium / system.wavelength_nm
+    c = _cos_theta(grid.rho, system)
+    c_edges = _cos_theta(np.array((0.0,) + radii + (1.0,)), system)  # decreasing
+    zone = np.searchsorted(np.asarray(radii), grid.rho, side="right")
+    out = np.zeros_like(grid.rho, dtype=float)
+    for k in range(n_z):
+        sel = (zone == k) & grid.mask
+        if not sel.any():
+            continue
+        ck = c[sel]
+        dc = c_edges[k] - c_edges[k + 1]
+        cm = 0.5 * (c_edges[k] + c_edges[k + 1])
+        ph = depths_nm[k] * (ck - 1.0)
+        if sw[k] != 0.0:
+            ph = ph + sw[k] / (2.0 * dc) * (ck - cm) ** 2
+        out[sel] = -k_n * ph + pist[k]
+    return out

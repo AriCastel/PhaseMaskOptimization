@@ -1,5 +1,15 @@
 # Phase 1: objective and targets
 
+> **Decisions (2026-11-08), gate passed.** EE50 is dropped as a constraint and
+> only reported. An EE400 floor of 0.15–0.19 over ±3 µm is the accepted target,
+> and S_min = 0.03 is kept. Camera: 6.5 µm / 66× = 98.5 nm pixels. Photometry
+> from real frames is in `psfsim/crlb.py`.
+>
+> The soft-min is now a trapezoid-weighted z-mean, so it no longer depends on
+> the grid spacing. Phase 1 soft-min values were computed with a plain sample
+> mean and differ by up to ~2 %; the ranking is unchanged. Phase 2 re-scores
+> the Phase 1 masks under the new definition.
+
 Same system as Phase 0: NA 1.1, 525 nm, n = 1.33, r_opt = 400 nm, uniform
 apodization, radial model. Reproduce with `python scripts/phase1_pareto.py`
 (~12 min). The raw output is in `phase1/phase1_output.md`, the numbers in
