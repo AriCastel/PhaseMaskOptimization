@@ -1,0 +1,63 @@
+{
+  "zoned_focus_4_sweep": {
+    "max_slope_waves_per_slm_px": 0.0404231925509535,
+    "n_jumps": 3,
+    "min_zone_width_slm_px": 36.188320598157986,
+    "jump_sizes_waves_wrapped": [
+      0.313,
+      0.059,
+      0.335
+    ]
+  },
+  "zoned_focus_3": {
+    "max_slope_waves_per_slm_px": 0.02415539511098075,
+    "n_jumps": 2,
+    "min_zone_width_slm_px": 56.11123840310055,
+    "jump_sizes_waves_wrapped": [
+      0.381,
+      0.313
+    ]
+  },
+  "zoned_focus_3_sweep": {
+    "max_slope_waves_per_slm_px": 0.03825590377903865,
+    "n_jumps": 2,
+    "min_zone_width_slm_px": 60.974609402757494,
+    "jump_sizes_waves_wrapped": [
+      0.416,
+      0.348
+    ]
+  },
+  "zoned_focus_5_sweep": {
+    "max_slope_waves_per_slm_px": 0.03436990657874617,
+    "n_jumps": 4,
+    "min_zone_width_slm_px": 4.081957549522597,
+    "jump_sizes_waves_wrapped": [
+      0.327,
+      0.395,
+      0.401,
+      0.41
+    ]
+  },
+  "annular_binary_3": {
+    "max_slope_waves_per_slm_px": 0.0,
+    "n_jumps": 3,
+    "min_zone_width_slm_px": 38.10276855079508,
+    "jump_sizes_waves_wrapped": [
+      0.5,
+      0.5,
+      0.5
+    ]
+  },
+  "zernike_m0": {
+    "max_slope_waves_per_slm_px": 0.047181909825777524,
+    "n_jumps": 0,
+    "min_zone_width_slm_px": 300.0,
+    "jump_sizes_waves_wrapped": []
+  },
+  "spherical+defocus": {
+    "max_slope_waves_per_slm_px": 0.03473345234237257,
+    "n_jumps": 0,
+    "min_zone_width_slm_px": 300.0,
+    "jump_sizes_waves_wrapped": []
+  }
+}

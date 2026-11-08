@@ -153,7 +153,17 @@ def main():
     ap.add_argument("--restarts", type=int, default=20)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--quick", action="store_true", help="tiny run for testing the pipeline")
+    ap.add_argument("--figures-only", action="store_true", help="redraw figures from saved results")
     args = ap.parse_args()
+    if args.figures_only:
+        js = json.loads((OUT / "results.json").read_text())
+        z = np.load(OUT / "best_curves.npz")
+        curves = {}
+        for key in z.files:
+            k, kk = key.split("__")
+            curves.setdefault(k, {})[kk] = z[key]
+        make_figures(js["configs"], curves, js["order"], Evaluator(RadialPSF(n_pupil=256), Targets()))
+        return
     (OUT / "figures").mkdir(parents=True, exist_ok=True)
     R = 2 if args.quick else args.restarts
     bscale = 0.1 if args.quick else 1.0
@@ -287,7 +297,9 @@ def main():
           "runtime_s": time.time() - t0}
     (OUT / "results.json").write_text(json.dumps(js, indent=2, default=float))
     np.savez_compressed(OUT / "best_curves.npz", **{f"{k}__{kk}": v for k, m in curves.items()
-                                                    for kk, v in m.items() if kk.startswith("curve") or kk.startswith("phase")})
+                                                    for kk, v in m.items()
+                                                    if (kk.startswith("curve") or kk.startswith("phase"))
+                                                    and kk != "curve_intensity"})
     make_figures(summary, curves, order, ref)
     print(f"\ndone in {time.time() - t0:.0f} s; wrote {OUT}")
 
@@ -310,14 +322,19 @@ def make_figures(summary, curves, order, ref):
     # 1. gate: best score vs number of zones
     fig, ax = plt.subplots(figsize=(8, 4.8))
     for label, fmt, col in [("zoned_focus_{n}", "o-", "#2b6cb0"), ("zoned_focus_{n}_sweep", "s-", "#2f855a"),
-                            ("layer_cake_{n}", "^-", "#805ad5")]:
-        ns = [n for n in (2, 3, 4, 5) if label.format(n=n) in summary]
-        ax.plot(ns, [summary[label.format(n=n)]["score"] for n in ns], fmt, color=col,
-                label=label.replace("_{n}", " N"))
+                            ("layer_cake_{n}", "^-", "#805ad5"), ("annular_binary_{e}", "D-", "#d69e2e")]:
+        ns = [n for n in (2, 3, 4, 5) if label.format(n=n, e=n - 1) in summary]
+        es = [summary[label.format(n=n, e=n - 1)] for n in ns]
+        feas = np.array([e["feasible"] for e in es])
+        vals = np.array([e["ee_softmin"] for e in es])
+        name = label.replace("_{n}", " N").replace("_{e}", " (N-1 edges)")
+        ax.plot(np.array(ns)[feas], vals[feas], fmt, color=col, label=name)
+        ax.plot(np.array(ns)[~feas], vals[~feas], fmt[0], color=col, mfc="none", ls="none")
         for n in ns:
-            sc = summary[label.format(n=n)]["cma_restart_scores"]
-            ax.scatter([n + (0.06 if "sweep" in label else -0.06 if "focus" in label else 0)] * len(sc), sc,
-                       s=8, color=col, alpha=0.3)
+            sc = [v for v in summary[label.format(n=n, e=n - 1)]["cma_restart_scores"] if v > 0]
+            off = {"#2b6cb0": -0.06, "#2f855a": 0.06}.get(col, 0.0)
+            if sc:
+                ax.scatter([n + off] * len(sc), sc, s=8, color=col, alpha=0.3)
     for (k, v), ls in zip(base_line.items(), ("--", ":")):
         ax.axhline(v, color="#c05621", ls=ls, lw=1.2, label=f"{k} (re-optimised)")
     ax.axhline(ceil, color="k", ls="-.", lw=0.8, label=f"flat ceiling {ceil:.3f}")
@@ -325,8 +342,9 @@ def make_figures(summary, curves, order, ref):
     ax.set_xticks([2, 3, 4, 5])
     ax.set_xlabel("number of zones N")
     ax.set_ylabel("soft-min EE400 over ±3 µm (S ≥ 0.03)")
-    ax.set_ylim(0, max(ceil, max(e["score"] for e in summary.values())) * 1.08)
-    ax.set_title("Phase 2 gate: best mask vs N (dots: individual CMA-ES restarts)", fontsize=10)
+    ax.set_ylim(0, ceil * 1.08)
+    ax.set_title("Phase 2 gate: best mask vs N (small dots: CMA-ES restarts; hollow: infeasible, S < 0.03)",
+                 fontsize=9)
     ax.legend(fontsize=7.5, loc="lower right")
     ax.grid(alpha=0.3)
     fig.tight_layout()
@@ -336,9 +354,9 @@ def make_figures(summary, curves, order, ref):
     # 2. curves of the best masks
     best_zoned = max((k for k in summary if k.startswith("zoned_focus")), key=lambda k: summary[k]["score"])
     best_cake = max((k for k in summary if k.startswith("layer_cake")), key=lambda k: summary[k]["score"])
-    show = [k for k in ("spherical+defocus", "zernike_m0", "zoned_zernike2", best_cake, best_zoned)
+    show = [k for k in ("spherical+defocus", "zernike_m0", best_cake, "annular_binary_3", best_zoned)
             if k in curves]
-    colors = ["#c05621", "#d69e2e", "#718096", "#805ad5", "#2b6cb0"]
+    colors = ["#c05621", "#d69e2e", "#805ad5", "#718096", "#2b6cb0"]
     fig, axes = plt.subplots(2, 2, figsize=(13, 8), sharex=True)
     for col, k in zip(colors, show):
         m = curves[k]
