@@ -2,3 +2,4 @@ numpy>=1.26
 scipy>=1.12
 matplotlib>=3.7
 pytest>=7
+pymoo>=0.6
