@@ -18,10 +18,24 @@ emitter, so the Fisher cross terms between x and (y, z, N, b) vanish and
 emitters can be included through `offsets_nm` (the bound is averaged in
 variance over them, ignoring the then non-zero cross terms).
 
-PLACEHOLDER photometry: the photon count, background and read noise defaults
-below are generic single-molecule numbers, NOT ReflEx3D measurements. Replace
-them with values from real frames before trusting absolute CRLB numbers (plan,
-open question).
+Photometry (defaults, 2026-11-08)
+--------------------------------
+Derived from ReflEx3D numbers for an in-focus emitter (16-bit mode): mean
+background 110 ADU/px, brightest pixel ~900 ADU, signal within 0.4 um radius
+"in the low thousands"; camera 6.5 um pixels at 66x = 98.5 nm on the sample.
+
+The simulated diffraction-limited in-focus PSF puts 11-12.5 % of its light in
+the brightest 98.5 nm pixel, so 900 - 110 = 790 ADU of peak signal implies
+~6,500 ADU in total (~5,700 ADU within 400 nm). This matches "low thousands"
+if that figure is in photons, with a typical sCMOS conversion of ~0.46 e-/ADU
+and an offset of 100 ADU (Hamamatsu ORCA-Flash-type values). Then:
+
+    N  ~ 6,500 ADU x 0.46 ~ 3,000 photons in the whole PSF
+    b  ~ (110 - 100) ADU x 0.46 ~ 4.6 photons / pixel     (low background)
+
+ASSUMED, to be confirmed: camera offset (100 ADU) and gain (0.46 e-/ADU).
+With offset 0 the background would be ~50 photons / pixel; `HIGH_BACKGROUND`
+holds that scenario so mask rankings can be checked in both regimes.
 """
 
 from __future__ import annotations
@@ -34,12 +48,15 @@ import numpy as np
 
 @dataclass(frozen=True)
 class Photometry:
-    n_photons: float = 2000.0  # detected signal photons per frame (PLACEHOLDER)
-    background: float = 10.0  # photons / pixel / frame (PLACEHOLDER)
-    read_noise_e: float = 1.6  # sCMOS rms read noise, e- (PLACEHOLDER)
-    camera_pixel_nm: float = 108.33  # object-side pitch (6.5 um / 60x)
+    n_photons: float = 3000.0  # detected photons in the whole PSF per frame
+    background: float = 4.6  # photons / pixel / frame
+    read_noise_e: float = 1.6  # sCMOS rms read noise, e- (assumed)
+    camera_pixel_nm: float = 6500.0 / 66.0  # object-side pitch (6.5 um / 66x)
     roi_px: int = 21  # fitting window, pixels per side (odd)
     subsample: int = 8  # sub-samples per pixel side for area integration
+
+
+HIGH_BACKGROUND = Photometry(background=50.0)
 
 
 class LateralCRLB:

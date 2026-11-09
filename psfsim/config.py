@@ -52,7 +52,7 @@ class OpticalSystem:
 
     # Camera (object-side pitch = camera_pixel_um / magnification)
     camera_pixel_um: float = 6.5
-    magnification: float = 60.0
+    magnification: float = 66.0  # 6.5 um / 66 = 98.5 nm on the sample
 
     # SLM, as imaged onto the pupil
     slm_pixels_across_pupil: float = 600.0  # SLM pixels spanning the pupil diameter

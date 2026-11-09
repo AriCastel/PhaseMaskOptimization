@@ -5,7 +5,11 @@ Primary objective (plan, Phase 1)
 ---------------------------------
     maximise   softmin_{|z| <= 3 um} EE400(z)
     subject to S(z)   >= S_min   for all |z| <= 3 um     (peak Strehl, detection proxy)
-               EE50(z) <= R_max  for all |z| <= 2 um     (spot-size cap near focus)
+
+EE50 is NOT a constraint (decision 2026-11-08): beyond ~2 um it tracks the
+geometric defocus cone and, since EE400 <= ~0.28, it mostly measures the halo.
+It is reported (`ee50_max_core_nm`, max over |z| <= 2 um) for a-posteriori
+interpretation. An R_max can still be set for experiments.
 
 Reported alongside: eta (in-range share of the mask-independent P(r_opt)
 budget), flatness (min/mean), CV, mean Strehl, mean PW-M2 and, optionally,
@@ -13,7 +17,8 @@ the worst-case lateral CRLB.
 
 Soft minimum
 ------------
-A power mean with negative exponent p,  M_p(v) = (mean v^p)^(1/p),  p < 0.
+A power mean with negative exponent p,  M_p(v) = (mean_z v^p)^(1/p),  p < 0,
+with the mean taken as a trapezoid-weighted z-integral (grid independent).
 It is scale-free (no temperature in EE units), lies between min(v) (p -> -inf)
 and the harmonic mean (p = -1), and is smooth, so gradient and CMA-type
 optimisers see progress before the single worst plane moves. p = -10 is the
@@ -21,8 +26,8 @@ default: a plane at half the level of the rest is weighted ~1000x more.
 
 Thresholds
 ----------
-S_min and R_max are PROVISIONAL until agreed with the advisor (Phase 1 gate).
-`scripts/phase1_pareto.py` shows how the attainable EE floor depends on them.
+S_min = 0.03, no EE50 cap, target EE400 floor 0.15-0.19 (agreed 2026-11-08;
+see docs/phase1_report.md for the threshold map behind them).
 """
 
 from __future__ import annotations
@@ -36,22 +41,35 @@ from .crlb import LateralCRLB, Photometry
 from .radial import RadialPSF
 
 
-def soft_min(values: np.ndarray, p: float = -10.0) -> float:
+def soft_min(values: np.ndarray, p: float = -10.0, weights: np.ndarray | None = None) -> float:
+    """Power mean (sum w v^p / sum w)^(1/p). Pass trapezoid weights in z so the
+    value is a z-integral mean and does not depend on the grid spacing (with
+    p = -10 the range ends, where EE usually drops, otherwise get a
+    grid-dependent weight)."""
     v = np.asarray(values, dtype=float)
     if np.any(v <= 0):
         return float(v.min())
-    return float(np.mean(v**p) ** (1.0 / p))
+    w = np.ones_like(v) if weights is None else np.asarray(weights, dtype=float)
+    return float((np.sum(w * v**p) / np.sum(w)) ** (1.0 / p))
+
+
+def trapezoid_weights(z: np.ndarray) -> np.ndarray:
+    z = np.asarray(z, dtype=float)
+    w = np.zeros_like(z)
+    d = np.diff(z)
+    w[:-1] += d / 2
+    w[1:] += d / 2
+    return w
 
 
 @dataclass(frozen=True)
 class Targets:
     z_range_nm: tuple[float, float] = (-3000.0, 3000.0)
     dz_nm: float = 50.0
-    # PROVISIONAL until agreed with the advisor (Phase 1 gate). Chosen at the
-    # knee of the threshold map in docs/phase1_report.md: tightening either
-    # one further costs EE floor; 1500 nm ~ the no-mask EE50 at |z| = 2 um.
+    # Agreed 2026-11-08 (Phase 1 gate): Strehl floor at the knee of the
+    # threshold map; EE50 reported only (r_max_nm = inf); EE400 target 0.15-0.19.
     s_min: float = 0.03
-    r_max_nm: float = 1500.0
+    r_max_nm: float = float("inf")
     ee50_range_nm: tuple[float, float] = (-2000.0, 2000.0)
     softmin_p: float = -10.0
     penalty: float = 2.0  # weight on relative constraint violation in `score`
@@ -71,6 +89,7 @@ class Evaluator:
         self.rad = rad or RadialPSF()
         self.targets = targets or Targets()
         self.z = self.targets.z_nm
+        self._w = trapezoid_weights(self.z)
         self.budget_p = self.rad.budgets().power_ropt_nm
         self.crlb = LateralCRLB(photometry or Photometry(camera_pixel_nm=self.rad.system.camera_pixel_object_nm))
         lo, hi = self.targets.ee50_range_nm
@@ -91,7 +110,7 @@ class Evaluator:
         ee, s, p = m["encircled_energy"], m["strehl"], m["power_ropt"]
         ee50_core = m["ee50_nm"][self._core]
         out = {
-            "ee_softmin": soft_min(ee, t.softmin_p),
+            "ee_softmin": soft_min(ee, t.softmin_p, self._w),
             "ee_min": float(ee.min()),
             "ee_mean": float(ee.mean()),
             "ee_flatness": float(ee.min() / ee.mean()),
@@ -116,6 +135,7 @@ class Evaluator:
                 out["curve_crlb_nm"] = c
         if keep_curves:
             out.update({f"curve_{k}": v for k, v in m.items()})
+            out["curve_intensity"] = inten
             out["curve_z_nm"] = self.z
         return out
 
