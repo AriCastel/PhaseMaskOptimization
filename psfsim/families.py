@@ -13,6 +13,7 @@ overall scale of the widths is a redundant direction, which CMA-ES tolerates.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -151,3 +152,19 @@ class ZonedFocus(Family):
         if self.sweep:
             p["sweeps_nm"] = tuple(x[3 * n - 1:4 * n - 1])
         return "zoned_focus", p
+
+
+def family_by_name(name: str, system: OpticalSystem | None = None) -> Family:
+    """Rebuild a family from the name it is logged under (e.g. in
+    docs/phase2/results.json): "zoned_focus_4_sweep", "annular_binary_3", ..."""
+    fixed = {"spherical+defocus": SphericalDefocus, "zernike_m0": ZernikeM0,
+             "zoned_zernike2": ZonedZernike2}
+    if name in fixed:
+        return fixed[name](system)
+    m = re.fullmatch(r"(annular_binary|layer_cake|zoned_focus)_(\d+)(_sweep)?", name)
+    if not m or (m.group(3) and m.group(1) != "zoned_focus"):
+        raise KeyError(f"unknown family {name!r}")
+    n = int(m.group(2))
+    if m.group(1) == "zoned_focus":
+        return ZonedFocus(n, sweep=bool(m.group(3)), system=system)
+    return {"annular_binary": AnnularBinary, "layer_cake": LayerCake}[m.group(1)](n, system)
