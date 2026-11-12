@@ -30,6 +30,7 @@ tests/                    Phase 0/1 checks
 docs/phase0_report.md     Phase 0 results
 docs/phase1_report.md     Phase 1 results (objective, thresholds)
 docs/phase2_report.md     Phase 2 results (zoned family vs baselines)
+docs/phase4a_report.md    Phase 4a: candidates on the real SLM
 ```
 
 Modules marked *reconstructed* were imported by the uploaded files but missing
