@@ -20,12 +20,12 @@ psfsim/
   objective.py   Phase 1: soft-min EE objective, Strehl / EE50 constraints, Evaluator
   crlb.py        Phase 1: lateral CRLB of the camera-sampled PSF (ReflEx3D photometry)
   families.py    Phase 2: parameterised mask families for the optimisers
-  slm_psf.py     Phase 4a: pixel-level SLM model (8 bit, 2pi cut, fringing) + 2D PSF / CRLB
+  export.py      mask files for the microscope: parameters (.json) + rasterised matrix (.npy)
 scripts/phase0_check.py   radial vs 2D cross-check and budget check
 scripts/phase1_pareto.py  NSGA-II Pareto study and threshold map
 scripts/phase2_zoned.py   zoned_focus search (grid, CMA-ES, Optuna) vs re-optimised baselines
-scripts/phase4a_*.py      candidate masks on the real SLM; pupil/mask scale sensitivity
-scripts/export_slm_patterns.py  8-bit SLM patterns at a given mask radius
+scripts/export_masks.py   export optimised masks for the microscope (reflex3d_controller)
+exports/                  the exported candidate masks (.json; the .npy rasters are generated)
 tests/                    Phase 0/1 checks
 docs/phase0_report.md     Phase 0 results
 docs/phase1_report.md     Phase 1 results (objective, thresholds)
@@ -67,3 +67,53 @@ python scripts/phase0_check.py      # ~2 min; writes docs/phase0/
 ```bash
 python -m pytest -q
 ```
+
+## Exporting masks to the microscope
+
+```bash
+python scripts/export_masks.py
+```
+
+writes the three masks carried to the bench into `exports/`, each as
+`<name>.json` (parameters and provenance) plus `<name>.npy` (rasterised matrix):
+
+| name | mask | from `docs/phase2/results.json` |
+|---|---|---|
+| `zoned_focus_3` | 3-zone `zoned_focus` | `zoned_focus_3` |
+| `zoned_focus_4_sweep` | 4-zone `zoned_focus` with per-zone sweep | `zoned_focus_4_sweep` |
+| `spherical_defocus` | re-centred spherical, Z11 + Z4 | `spherical+defocus` |
+
+`--configs` picks other configurations (e.g. `annular_binary_3`), and
+
+```bash
+python scripts/export_masks.py --controller ../reflex3d_controller
+```
+
+also copies the `.json` files into that checkout's `config/mask_library/`, where
+the controller lists them in its 'SLM phase mask' panel (add
+`--controller-rasters` to copy the matrices too).
+
+The two forms, both in waves and both described in `psfsim/export.py`:
+
+- **Parameters** (`"parametric"` in the `.json`): `zoned_focus` (radii, depths,
+  pistons, sweeps, with the NA / n / wavelength they were optimised for),
+  `zernike` (explicit `(n, m)` modes in waves RMS) or `annular` (radii, phases).
+  The controller evaluates these analytically on each channel's pupil, so they
+  are exact for any pupil size and centre on the SLM. This is what it uses when
+  a file has both forms.
+- **Rasterised matrix** (`<name>.npy`, `np.load` gives it): the unwrapped phase
+  as a square float32 array across the pupil diameter (1024 px by default,
+  `--raster-pixels`), 0 outside the pupil; element `[i, j]` is at
+  `x = (2j + 1)/N - 1`, `y = (2i + 1)/N - 1`. Any registered mask can be
+  exported this way, including ones with no parametric form in the controller
+  (`cubic`, `zoned_zernike`, future free-form phases), which are then
+  raster-only. The `.npy` files are not committed (4 MB each); the script
+  regenerates them.
+
+From code, for any mask:
+
+```python
+from psfsim.export import export_mask
+export_mask("exports", "my_mask", "zoned_focus", {"radii": (0.5, 0.8), "depths_nm": (0, -1500, 2000)})
+```
+
