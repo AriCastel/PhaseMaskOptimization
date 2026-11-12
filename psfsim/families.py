@@ -18,7 +18,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .config import OpticalSystem
-from .masks import equal_dc_radii, t_to_rho
+from .masks import equal_dc_radii, rho_to_t, t_to_rho
+from .zernike import radial_polynomial
 
 DEPTH_BOUND_NM = 4000.0
 SWEEP_BOUND_NM = 4000.0
@@ -151,3 +152,76 @@ class ZonedFocus(Family):
         if self.sweep:
             p["sweeps_nm"] = tuple(x[3 * n - 1:4 * n - 1])
         return "zoned_focus", p
+
+
+def noll_m0(n: int) -> int:
+    """Noll index of the radially symmetric Zernike Z(n, 0): 1, 4, 11, 22, 37, ..."""
+    return n * (n + 1) // 2 + 1
+
+
+class ZonedZernikeRadial(Family):
+    """N zones with free edges (widths in t); every zone carries its own set of
+    radially symmetric Zernikes Z(n, 0), n = 0, 2, ..., `max_order`, i.e. piston,
+    defocus, primary spherical and (max_order = 6) secondary spherical.
+
+    The polynomials live in the zone's own unit-disk coordinate
+    rho' = sqrt((rho^2 - a^2) / (b^2 - a^2)) (`zoned_zernike`, local_coords) and are
+    not normalised, so a coefficient is the peak amplitude of that term inside the
+    zone, in waves. rho'^2 is affine in rho^2, so the span is the same as with
+    full-pupil Zernikes cut into zones (any even polynomial of degree <= max_order
+    per zone); the local form is used because the terms are orthogonal over the
+    zone, which is what the optimiser needs. Zone 0's piston is the global piston
+    and is fixed at 0.
+
+    `max_order = 2` is the paraxial "zoned defocus + piston" mask. With
+    `max_order = 6` the family contains `zoned_focus` (exact defocus, with or
+    without sweep) to ~1e-3 waves: see `from_phase`.
+    """
+
+    COEF_BOUND = {0: (-1.0, 2.0), 2: (-2.0, 2.0), 4: (-1.0, 1.0), 6: (-0.5, 0.5), 8: (-0.25, 0.25)}
+
+    def __init__(self, n_zones: int, max_order: int = 6, system=None):
+        if max_order % 2 or not 2 <= max_order <= 8:
+            raise ValueError("max_order must be 2, 4, 6 or 8")
+        n = n_zones
+        self.orders = tuple(range(0, max_order + 1, 2))
+        self.terms = [(k, o) for k in range(n) for o in self.orders if (k, o) != (0, 0)]
+        names = [f"w{k}" for k in range(n)] + [f"c{o}_{k}" for k, o in self.terms]
+        lo = [MIN_WIDTH] * n + [self.COEF_BOUND[o][0] for _, o in self.terms]
+        hi = [1.0] * n + [self.COEF_BOUND[o][1] for _, o in self.terms]
+        super().__init__(f"zoned_zernike{max_order}_{n}", names, np.array(lo, float), np.array(hi, float),
+                         system or OpticalSystem())
+        self.n_zones, self.max_order = n, max_order
+
+    def mask(self, x):
+        n = self.n_zones
+        x = np.asarray(x, dtype=float)
+        coeffs = [dict() for _ in range(n)]
+        for (k, o), v in zip(self.terms, x[n:]):
+            coeffs[k][noll_m0(o)] = float(v)
+        return "zoned_zernike", {"radii": widths_to_radii(x[:n], self.system),
+                                 "zone_coefficients": tuple(coeffs), "local_coords": True}
+
+    def from_phase(self, radii, rho: np.ndarray, phase_waves: np.ndarray) -> np.ndarray:
+        """Parameter vector whose mask is the least-squares fit, zone by zone, of a
+        radial phase profile `phase_waves` sampled on `rho` (equal-area nodes, e.g.
+        `RadialPSF.rho`) with zone edges `radii`. Pistons are taken relative to
+        zone 0 and wrapped into [0, 1) wave. Used to warm-start from another family."""
+        n = self.n_zones
+        radii = np.asarray(radii, dtype=float)
+        if radii.size != n - 1:
+            raise ValueError(f"need {n - 1} radii")
+        edges = np.concatenate([[0.0], radii, [1.0]])
+        fit = {}
+        for k in range(n):
+            a, b = edges[k], edges[k + 1]
+            sel = (rho >= a) & (rho < b)
+            r = np.sqrt(np.clip((rho[sel] ** 2 - a * a) / (b * b - a * a), 0.0, 1.0))
+            basis = np.stack([radial_polynomial(o, 0, r) for o in self.orders], axis=1)
+            co = np.linalg.lstsq(basis, np.asarray(phase_waves)[sel], rcond=None)[0]
+            fit.update({(k, o): c for o, c in zip(self.orders, co)})
+        p0 = fit[(0, 0)]
+        t = np.concatenate([[0.0], rho_to_t(radii, self.system), [1.0]])
+        w = np.diff(t)
+        vals = [np.mod(fit[(k, o)] - p0, 1.0) if o == 0 else fit[(k, o)] for k, o in self.terms]
+        return np.clip(np.concatenate([w / w.max(), vals]), self.lo, self.hi)
