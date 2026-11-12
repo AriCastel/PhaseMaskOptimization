@@ -18,19 +18,24 @@ psfsim/
   metrics.py     Strehl / EE(r_opt) / PW-M2 per plane, + range summaries (eta, flatness)
   radial.py      Phase 0: fast 1D Debye model for radially symmetric masks + depth budgets
   objective.py   Phase 1: soft-min EE objective, Strehl / EE50 constraints, Evaluator
+                 (ee_denominator: EE400 window, or all emitted light)
   crlb.py        Phase 1: lateral CRLB of the camera-sampled PSF (ReflEx3D photometry)
   families.py    Phase 2: parameterised mask families for the optimisers
+                 (+ ZonedZernikeRadial: free Z(n,0), n <= 6, per zone)
   slm_psf.py     Phase 4a: pixel-level SLM model (8 bit, 2pi cut, fringing) + 2D PSF / CRLB
 scripts/phase0_check.py   radial vs 2D cross-check and budget check
 scripts/phase1_pareto.py  NSGA-II Pareto study and threshold map
 scripts/phase2_zoned.py   zoned_focus search (grid, CMA-ES, Optuna) vs re-optimised baselines
 scripts/phase4a_*.py      candidate masks on the real SLM; pupil/mask scale sensitivity
 scripts/export_slm_patterns.py  8-bit SLM patterns at a given mask radius
+scripts/zz6_search.py     zoned masks with free Zernikes up to order 6 per zone (N = 3, 4)
+scripts/zz6_compare.py    PSF comparison of the best one against the current candidates
 tests/                    Phase 0/1 checks
 docs/phase0_report.md     Phase 0 results
 docs/phase1_report.md     Phase 1 results (objective, thresholds)
 docs/phase2_report.md     Phase 2 results (zoned family vs baselines)
 docs/phase4a_report.md    Phase 4a: candidates on the real SLM
+docs/zoned_zernike6_report.md   free Zernikes per zone: no real gain, and an EE400 loophole
 ```
 
 Modules marked *reconstructed* were imported by the uploaded files but missing

@@ -187,7 +187,7 @@ def main():
     print("|---|---|---|---|")
     for k, v in ind.items():
         print(f"| {masks[k][0]} | {', '.join(f'{j:.2f}' for j in v['jumps_waves']) or '–'} | "
-              f"{v['max_slope_waves_per_px']:.3f} | {v['narrowest_zone_px']:.0f} |")
+              f"{v['max_slope_waves_per_px']:.3f} | {f'{v['narrowest_zone_px']:.0f}' if v['jumps_waves'] else '–'} |")
 
     # ---- SLM pattern of the new mask (drawn at the pupil radius, 724 x 724 frame) --------
     from PIL import Image
@@ -257,37 +257,39 @@ def make_figures(masks, sweeps, summary, key, patterns, sim):
         ax.axvspan(-4, -3, color="#f0efec", zorder=0, lw=0)
         ax.axvspan(3, 4, color="#f0efec", zorder=0, lw=0)
     axes[0].set_ylim(0, 0.45)
-    axes[0].annotate("no mask peaks at 0.88", xy=(0.12, 0.445), xytext=(0.5, 0.40), fontsize=8, color=INK2,
-                     arrowprops=dict(arrowstyle="-", color=INK2, lw=0.6))
+    axes[0].text(0.85, 0.425, "no mask peaks at 0.87", fontsize=8, color=INK2)
     axes[1].set_yscale("log")
     axes[1].set_ylim(3e-3, 1.2)
     axes[1].axhline(0.03, color=INK2, lw=0.8)
-    axes[1].text(-3.95, 0.033, "constraint: Strehl ≥ 0.03", fontsize=8, color=INK2, va="bottom")
+    axes[1].text(0.0, 0.027, "constraint: Strehl ≥ 0.03", fontsize=8, color=INK2, va="top", ha="center")
     axes[2].set_yscale("log")
     axes[2].set_ylim(1.5, 150)
     axes[2].set_yticks([2, 5, 10, 20, 50, 100], labels=["2", "5", "10", "20", "50", "100"])
     axes[2].set_xlabel("z (µm); shaded: outside the ±3 µm design range")
-    axes[0].legend(ncol=2, fontsize=8.5, loc="upper left", bbox_to_anchor=(0.0, 1.0))
+    h, l = axes[0].get_legend_handles_labels()
+    fig.legend(h, l, ncol=3, fontsize=8.5, loc="upper left", bbox_to_anchor=(0.04, 0.965))
     fig.suptitle("Depth response of the five PSFs (" + HEAD + ")", x=0.012, ha="left", fontsize=12, fontweight="bold")
-    fig.tight_layout(rect=(0, 0, 1, 0.975))
+    fig.tight_layout(rect=(0, 0, 1, 0.925))
     fig.savefig(fig_dir / "metrics_vs_z.png", dpi=150)
     plt.close(fig)
 
     # 2. worst case within the range: one horizontal bar chart per metric
-    fig, axes = plt.subplots(1, 3, figsize=(12, 3.3))
-    for ax, (m, title, f) in zip(axes, [("p_softmin", "Soft-min P400 over ±3 µm (higher is better)", "{:.3f}"),
-                                        ("p_min", "Lowest P400 over ±3 µm (higher is better)", "{:.3f}"),
-                                        ("crlb_max_nm", "Worst lateral CRLB over ±3 µm, nm (lower is better)", "{:.1f}")]):
+    fig, axes = plt.subplots(1, 3, figsize=(12.5, 2.9))
+    for ax, (m, title, f) in zip(axes, [("p_softmin", "Soft-min P400 (higher is better)", "{:.3f}"),
+                                        ("p_min", "Lowest P400 (higher is better)", "{:.3f}"),
+                                        ("crlb_max_nm", "Worst lateral CRLB, nm (lower is better)", "{:.1f}")]):
         order = names[::-1]
         vals = [summary[k][HEAD][m] for k in order]
-        ax.barh(range(len(order)), vals, height=0.55, color=[COLOR[k] for k in order])
+        ax.set_axisbelow(True)
+        ax.barh(range(len(order)), vals, height=0.42, color=[COLOR[k] for k in order])
         for i, v in enumerate(vals):
             ax.text(v, i, " " + f.format(v), va="center", fontsize=8.5, color=INK)
         ax.set_yticks(range(len(order)), [lab[k] for k in order] if ax is axes[0] else [""] * len(order))
         ax.set_title(title, fontsize=9)
         ax.grid(axis="y", visible=False)
         ax.set_xlim(0, max(vals) * 1.18)
-    fig.tight_layout()
+    fig.suptitle("Worst case over the ±3 µm range (" + HEAD + ")", x=0.012, ha="left", fontsize=11, fontweight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(fig_dir / "worst_case.png", dpi=150)
     plt.close(fig)
 
@@ -313,7 +315,7 @@ def make_figures(masks, sweeps, summary, key, patterns, sim):
                 ax.set_ylabel(lab[k].replace(" (", "\n(").replace(", N", ",\nN"), fontsize=8, color=INK)
     fig.colorbar(im, ax=axes, shrink=0.5, pad=0.015, label="intensity / no-mask in-focus peak")
     fig.suptitle("PSF at each depth (" + HEAD + "; 4 × 4 µm, log scale). Dashed circle: r = 400 nm. "
-                 "P = P400, S = peak Strehl, σ = lateral CRLB", fontsize=10, x=0.01, ha="left")
+                 "P = P400, S = peak Strehl, σ = lateral CRLB", fontsize=10, x=0.01, y=0.925, ha="left")
     fig.savefig(fig_dir / "psf_gallery.png", dpi=130, bbox_inches="tight")
     plt.close(fig)
 
@@ -333,7 +335,7 @@ def make_figures(masks, sweeps, summary, key, patterns, sim):
                 ax.set_ylabel(lab[k].replace(" (", "\n(").replace(", N", ",\nN"), fontsize=8, color=INK)
     fig.colorbar(im, ax=axes, shrink=0.5, pad=0.015, label="photons per pixel (clipped at the top of the scale)")
     fig.suptitle("Simulated camera frames: 21 × 21 px of 98.5 nm, 3000 photons + 4.6 photons/px background, "
-                 "one Poisson draw, one grey scale for all panels", fontsize=10, x=0.01, ha="left")
+                 "one Poisson draw, one grey scale for all panels", fontsize=10, x=0.01, y=0.925, ha="left")
     fig.savefig(fig_dir / "camera_gallery.png", dpi=130, bbox_inches="tight")
     plt.close(fig)
 
@@ -351,7 +353,7 @@ def make_figures(masks, sweeps, summary, key, patterns, sim):
     axes[0].set_ylabel("z (µm)")
     fig.colorbar(im, ax=axes, shrink=0.8, pad=0.015, label="intensity / no-mask in-focus peak")
     fig.suptitle("x–z sections through the axis (log scale); dashed: the ±3 µm design range", fontsize=10,
-                 x=0.01, ha="left")
+                 x=0.01, y=1.04, ha="left")
     fig.savefig(fig_dir / "xz_sections.png", dpi=140, bbox_inches="tight")
     plt.close(fig)
 
@@ -367,11 +369,11 @@ def make_figures(masks, sweeps, summary, key, patterns, sim):
         ax.plot(rad.rho[order], ph - ph[0], **line_kw(k))
     ax.set_xlabel("normalised pupil radius ρ")
     ax.set_title("Mask phase before the 2π cut (waves; centre = 0)")
-    ax.legend(ncol=4, fontsize=8.5, loc="upper left")
+    ax.legend(ncol=1, fontsize=8.5, loc="lower left")
     for j, k in enumerate(shown):
         a = fig.add_subplot(gs[1, j])
         im = a.imshow(patterns[k], cmap="twilight", vmin=0, vmax=255, origin="lower")
-        a.set_title(lab[k], fontsize=8.5)
+        a.set_title(lab[k].replace(" (", "\n("), fontsize=8.5)
         a.set_xticks([0, 362, 723]), a.set_yticks([0, 362, 723])
         a.grid(False)
     fig.colorbar(im, ax=fig.axes[1:], shrink=0.75, pad=0.015, label="8-bit level (256 = 2π)")
@@ -439,7 +441,7 @@ def make_figures(masks, sweeps, summary, key, patterns, sim):
         ax.axvspan(-4, -3, color="#f0efec", zorder=0, lw=0)
         ax.axvspan(3, 4, color="#f0efec", zorder=0, lw=0)
     axes[0].set_ylim(0, 0.34), axes[1].set_ylim(0, 0.34), axes[2].set_ylim(0, 1.05)
-    axes[0].legend(fontsize=7.5, loc="lower center")
+    axes[2].legend(fontsize=8, loc="lower center")
     fig.tight_layout()
     fig.savefig(fig_dir / "loophole.png", dpi=150)
     plt.close(fig)
