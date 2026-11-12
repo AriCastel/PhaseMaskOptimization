@@ -7,7 +7,10 @@ Masks
   spherical + defocus (re-centred)       optimised spherical aberration, Phase 2
   zoned_focus N=4 (defocus + piston)     Phase 2
   zoned_focus N=4 + sweep                Phase 2 (bench candidate)
-  zoned_zernike6 N=<3|4>                 best of docs/zoned_zernike6/results.json
+  zoned_zernike6 N=<3|4>                 best of docs/zoned_zernike6/emitted/results.json, i.e. optimised
+                                         with the 400 nm energy taken as a fraction of all emitted light
+The mask optimised with the agreed EE400 (fraction of the light inside 10 um) is shown
+only in figures/loophole.png: it wins that score by throwing light out of the window.
 
 SLM configurations (psfsim.slm_psf, pixel-level model of Phase 4a)
   ideal (continuous)                          = the radial model of the search
@@ -43,6 +46,7 @@ sys.path.insert(0, str(ROOT))
 from psfsim import OpticalSystem, RadialPSF  # noqa: E402
 from psfsim.crlb import Photometry  # noqa: E402
 from psfsim.families import SphericalDefocus, ZonedFocus, ZonedZernikeRadial  # noqa: E402
+from psfsim.objective import Evaluator, Targets, soft_min, trapezoid_weights  # noqa: E402
 from psfsim.slm_psf import REAL_PUPIL_PX, SLMDevice, SLMPSF, range_summary_slm  # noqa: E402
 
 OUT = ROOT / "docs" / "zoned_zernike6"
@@ -64,8 +68,8 @@ NEW, ZF4, ZF4S, SPH, NOMASK = "new", "zf4", "zf4s", "sph", "none"
 COLOR = {NEW: "#2a78d6", ZF4: "#eb6834", ZF4S: "#1baf7a", SPH: "#eda100", NOMASK: "#8a8984"}
 
 
-def best_new():
-    cfg = json.loads((OUT / "results.json").read_text())["configs"]
+def best_new(denominator="emitted"):
+    cfg = json.loads((OUT / denominator / "results.json").read_text())["configs"]
     cands = [k for k in ("zoned_zernike6_3", "zoned_zernike6_4") if cfg[k]["feasible"]]
     k = max(cands, key=lambda k: cfg[k]["score"])
     return k, cfg[k]
@@ -89,6 +93,16 @@ def _sweep(args):
     _, (m, p) = candidate_masks()[key]
     sim = SLMPSF(OpticalSystem(), DEVICES[dname])
     return key, dname, sim.sweep(Z, sim.displayed_phase(m, p), keep_rows=(dname == HEAD))
+
+
+def summarise(sw, budget):
+    """range_summary_slm plus the emitted-light normalisation of the 400 nm energy."""
+    s = range_summary_slm(sw, budget_nm=budget)
+    sel = np.abs(sw["z_nm"]) <= 3000 + 1e-9
+    p = sw["power_ropt"][sel]
+    s.update({"p_softmin": soft_min(p, -10.0, trapezoid_weights(sw["z_nm"][sel])), "p_min": float(p.min()),
+              "window_fraction_min": float(sw["total_power"][sel].min())})
+    return s
 
 
 def slm_indicators(m, p, radius_px=REAL_PUPIL_PX):
@@ -124,8 +138,8 @@ def main():
     with Pool(args.workers) as pool:
         for key, dname, sw in pool.imap_unordered(_sweep, [(k, d) for k in masks for d in DEVICES]):
             sweeps[(key, dname)] = sw
-            summary.setdefault(key, {})[dname] = range_summary_slm(sw, budget_nm=budget)
-            print(f"  {masks[key][0]:38s} | {dname:42s} softmin {summary[key][dname]['ee_softmin']:.4f} "
+            summary.setdefault(key, {})[dname] = summarise(sw, budget)
+            print(f"  {masks[key][0]:38s} | {dname:42s} softmin P {summary[key][dname]['p_softmin']:.4f} "
                   f"({time.time() - t0:.0f} s)", flush=True)
 
     # ---- key depths, headline configuration ------------------------------------
@@ -145,8 +159,8 @@ def main():
             key[k].append(r)
 
     # ---- tables ---------------------------------------------------------------
-    cols = [("ee_softmin", "soft-min EE400"), ("ee_min", "EE400 min"), ("ee_mean", "EE400 mean"),
-            ("strehl_min", "Strehl min"), ("crlb_max_nm", "worst CRLB"), ("crlb_mean_nm", "mean CRLB"),
+    cols = [("p_softmin", "soft-min P400 (emitted)"), ("p_min", "P400 min"), ("ee_softmin", "soft-min EE400 (window)"),
+            ("ee_min", "EE400 min"), ("window_fraction_min", "light inside 10 µm, min"), ("strehl_min", "Strehl min"), ("crlb_max_nm", "worst CRLB"), ("crlb_mean_nm", "mean CRLB"),
             ("crlb_max_highbg_nm", "worst CRLB, high bg"), ("ee50_max_core_nm", "EE50 max ±2 µm")]
 
     def fmt(x):
@@ -159,11 +173,11 @@ def main():
         for dname in DEVICES:
             print(f"| {label} | {dname} | " + " | ".join(fmt(summary[k][dname][c]) for c, _ in cols) + " |")
 
-    print("\n## Key depths, " + HEAD + " (EE400 / peak Strehl / CRLB nm / EE50 nm)\n")
+    print("\n## Key depths, " + HEAD + " (P400 / peak Strehl / CRLB nm / EE50 nm)\n")
     print("| mask | " + " | ".join(f"{z / 1000:+.0f} µm" for z in KEY_Z) + " | worst CRLB |")
     print("|---|" + "---|" * (len(KEY_Z) + 1))
     for k, (label, _) in masks.items():
-        cells = [f"{r['encircled_energy']:.3f} / {r['strehl']:.3f} / {r['crlb_nm']:.1f} / {r['ee50_nm']:.0f}"
+        cells = [f"{r['power_ropt']:.3f} / {r['strehl']:.3f} / {r['crlb_nm']:.1f} / {r['ee50_nm']:.0f}"
                  + (f" @ {r['z_nm'] / 1000:+.2f}" if "worst" in r["label"] else "") for r in key[k]]
         print(f"| {label} | " + " | ".join(cells) + " |")
 
@@ -196,7 +210,7 @@ def main():
     (OUT / "compare.json").write_text(json.dumps(js, indent=2, default=float))
     np.savez_compressed(OUT / "compare_curves.npz", z_nm=Z, **{
         f"{k}__{d}__{m}": sweeps[(k, d)][m] for k in masks for d in DEVICES
-        for m in ("encircled_energy", "strehl", "crlb_nm", "crlb_highbg_nm", "ee50_nm")})
+        for m in ("encircled_energy", "power_ropt", "total_power", "strehl", "crlb_nm", "crlb_highbg_nm", "ee50_nm")})
     make_figures(masks, sweeps, summary, key, patterns, sim)
     print(f"\ndone in {time.time() - t0:.0f} s; wrote {OUT}")
 
@@ -233,7 +247,7 @@ def make_figures(masks, sweeps, summary, key, patterns, sim):
 
     # 1. metrics vs z (headline configuration): three small multiples on a shared z axis
     fig, axes = plt.subplots(3, 1, figsize=(9.5, 10.5), sharex=True)
-    panels = [("encircled_energy", "EE400: fraction of the light within r = 400 nm"),
+    panels = [("power_ropt", "P400: fraction of all emitted light within r = 400 nm"),
               ("strehl", "Peak Strehl (log scale)"),
               ("crlb_nm", "Lateral CRLB, nm (log scale; 3000 photons, 4.6 photons/px background)")]
     for ax, (m, title) in zip(axes, panels):
@@ -261,8 +275,8 @@ def make_figures(masks, sweeps, summary, key, patterns, sim):
 
     # 2. worst case within the range: one horizontal bar chart per metric
     fig, axes = plt.subplots(1, 3, figsize=(12, 3.3))
-    for ax, (m, title, f) in zip(axes, [("ee_softmin", "Soft-min EE400 over ±3 µm (higher is better)", "{:.3f}"),
-                                        ("ee_min", "Lowest EE400 over ±3 µm (higher is better)", "{:.3f}"),
+    for ax, (m, title, f) in zip(axes, [("p_softmin", "Soft-min P400 over ±3 µm (higher is better)", "{:.3f}"),
+                                        ("p_min", "Lowest P400 over ±3 µm (higher is better)", "{:.3f}"),
                                         ("crlb_max_nm", "Worst lateral CRLB over ±3 µm, nm (lower is better)", "{:.1f}")]):
         order = names[::-1]
         vals = [summary[k][HEAD][m] for k in order]
@@ -293,13 +307,13 @@ def make_figures(masks, sweeps, summary, key, patterns, sim):
             ax.set_xticks([]), ax.set_yticks([])
             ax.grid(False)
             ax.set_title(r["label"], fontsize=7.5, fontweight="normal", loc="center")
-            ax.text(0.03, 0.03, f"EE {r['encircled_energy']:.2f}\nS {r['strehl']:.2f}\nσ {r['crlb_nm']:.1f} nm",
+            ax.text(0.03, 0.03, f"P {r['power_ropt']:.2f}\nS {r['strehl']:.2f}\nσ {r['crlb_nm']:.1f} nm",
                     transform=ax.transAxes, fontsize=6.5, color="w", va="bottom")
             if j == 0:
                 ax.set_ylabel(lab[k].replace(" (", "\n(").replace(", N", ",\nN"), fontsize=8, color=INK)
     fig.colorbar(im, ax=axes, shrink=0.5, pad=0.015, label="intensity / no-mask in-focus peak")
     fig.suptitle("PSF at each depth (" + HEAD + "; 4 × 4 µm, log scale). Dashed circle: r = 400 nm. "
-                 "EE = EE400, S = peak Strehl, σ = lateral CRLB", fontsize=10, x=0.01, ha="left")
+                 "P = P400, S = peak Strehl, σ = lateral CRLB", fontsize=10, x=0.01, ha="left")
     fig.savefig(fig_dir / "psf_gallery.png", dpi=130, bbox_inches="tight")
     plt.close(fig)
 
@@ -367,35 +381,67 @@ def make_figures(masks, sweeps, summary, key, patterns, sim):
     plt.close(fig)
 
     # 7. search: best score of every optimiser run, per family
-    js = json.loads((OUT / "results.json").read_text())["configs"]
+    js = json.loads((OUT / "emitted" / "results.json").read_text())["configs"]
     fams = [("zoned_focus_3", "zoned defocus\nN=3", ZF4), ("zoned_focus_3_sweep", "zoned defocus\nN=3 + sweep", ZF4S),
             ("zoned_zernike6_3", "zoned Zernike ≤ 6\nN=3", NEW), ("zoned_focus_4", "zoned defocus\nN=4", ZF4),
             ("zoned_focus_4_sweep", "zoned defocus\nN=4 + sweep", ZF4S), ("zoned_zernike6_4", "zoned Zernike ≤ 6\nN=4", NEW)]
     mk = {"cold": "o", "cold-long": "s", "warm": "^", "polish": "D", "phase2": "*"}
+    lo_y = max(js[f]["search_score"] for f, _, _ in fams) - 0.035
     fig, ax = plt.subplots(figsize=(10, 4.8))
     rng = np.random.default_rng(0)
     for i, (f, _, ck) in enumerate(fams):
         for r in js[f]["runs"]:
+            if r["score"] < lo_y:
+                continue
             src = r["source"].split(":")[0]
             ax.scatter(i + rng.uniform(-0.22, 0.22), r["score"], s=26, marker=mk[src], color=COLOR[ck], alpha=0.75,
                        edgecolor=SURFACE, linewidth=0.6, zorder=3)
         ax.hlines(js[f]["search_score"], i - 0.32, i + 0.32, color=INK, lw=1.2, zorder=4)
         ax.text(i, js[f]["search_score"] + 0.0012, f"{js[f]['search_score']:.4f}", ha="center", fontsize=8.5)
         if "phase2_score" in js[f]:
-            ax.scatter(i, js[f]["phase2_score"], s=70, marker="*", color=INK2, zorder=5)
+            ax.scatter(i - 0.38, js[f]["phase2_score"], s=70, marker="*", color=INK2, zorder=5)
     for src, label in [("cold", "random start, Phase 2 budget"), ("cold-long", "random start, 3× population, 12 000 evaluations"),
-                       ("warm", "started from a Phase 2 zoned-defocus optimum"), ("polish", "polish of the best runs"),
-                       ("phase2", "Phase 2 optimum of that family")]:
+                       ("warm", "started from a zoned-defocus optimum or the window-objective optimum"), ("polish", "polish of the best runs"),
+                       ("phase2", "Phase 2 optimum of that family, same score")]:
         ax.scatter([], [], s=70 if src == "phase2" else 26, marker=mk[src], color=INK2, label=label)
     ax.axvline(2.5, color=GRID, lw=1)
     ax.set_xticks(range(len(fams)), [f[1] for f in fams])
-    ax.set_ylim(0.19, 0.245)
-    ax.set_ylabel("soft-min EE400 over ±3 µm (Strehl ≥ 0.03)")
+    top = max(js[f]["search_score"] for f, _, _ in fams)
+    ax.set_ylim(top - 0.035, top + 0.006)
+    ax.set_ylabel("soft-min P400 over ±3 µm (Strehl ≥ 0.03)")
     ax.grid(axis="x", visible=False)
-    ax.set_title("Best score of every CMA-ES run (search evaluator); bar and number: best of the family")
+    ax.set_title("Best score of every CMA-ES run (search evaluator); bar and number: best of the family.\n"
+                 "Runs below the axis range are not shown.")
     ax.legend(fontsize=7.5, loc="lower left", ncol=2)
     fig.tight_layout()
     fig.savefig(fig_dir / "search_runs.png", dpi=150)
+    plt.close(fig)
+
+    # 8. the loophole: EE400 (window) against P400 (emitted) for the window-optimised mask
+    ev = Evaluator(RadialPSF(n_pupil=2048, dr_nm=10.0), Targets(dz_nm=25.0, z_range_nm=(-4000.0, 4000.0)))
+    kw, ew = best_new("window")
+    nw = int(kw.rsplit("_", 1)[1])
+    trio = [(ZF4S, lab[ZF4S], masks[ZF4S][1], "-"),
+            (NEW, lab[NEW].replace(" (new)", ", optimised on P400 (emitted)"), masks[NEW][1], "-"),
+            ("loop", f"zoned Zernike ≤ 6, N={nw}, optimised on EE400 (window)", ZonedZernikeRadial(nw, 6).mask(ew["x"]), "-")]
+    col = {**COLOR, "loop": "#e34948"}
+    fig, axes = plt.subplots(1, 3, figsize=(13, 3.9), sharex=True)
+    for k, label, (m, p), ls in trio:
+        r = ev.evaluate_mask(m, p, keep_curves=True)
+        zz = r["curve_z_nm"] / 1000
+        for ax, c in zip(axes, ("curve_encircled_energy", "curve_power_ropt", "curve_total_power")):
+            ax.plot(zz, r[c], color=col[k], lw=2.0, ls=ls, label=label)
+    for ax, t in zip(axes, ["EE400: energy within 400 nm / light inside 10 µm\n(the agreed score)",
+                            "P400: energy within 400 nm / all emitted light",
+                            "Fraction of the emitted light inside 10 µm\n(the EE400 denominator)"]):
+        ax.set_title(t, fontsize=9)
+        ax.set_xlabel("z (µm)")
+        ax.axvspan(-4, -3, color="#f0efec", zorder=0, lw=0)
+        ax.axvspan(3, 4, color="#f0efec", zorder=0, lw=0)
+    axes[0].set_ylim(0, 0.34), axes[1].set_ylim(0, 0.34), axes[2].set_ylim(0, 1.05)
+    axes[0].legend(fontsize=7.5, loc="lower center")
+    fig.tight_layout()
+    fig.savefig(fig_dir / "loophole.png", dpi=150)
     plt.close(fig)
 
 

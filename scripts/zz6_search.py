@@ -2,8 +2,12 @@
 Zoned radial-Zernike masks: free Z(n, 0), n <= 6, in every zone (N = 3 and 4),
 against the `zoned_focus` (exact defocus + piston [+ sweep]) candidates of Phase 2.
 
-Objective and constraint are those of Phase 2: maximise the soft-min of EE400
-over |z| <= 3 um subject to peak Strehl >= 0.03. Search evaluator: 1024 pupil
+Objective: maximise the soft-min over |z| <= 3 um of the energy within r = 400 nm,
+subject to peak Strehl >= 0.03. `--denominator window` takes that energy as a
+fraction of the light inside 10 um (EE400 exactly as in Phase 2); `--denominator
+emitted` (default) as a fraction of all the light through the pupil, which a mask
+cannot inflate by throwing light out of the 10 um window (see psfsim/objective.py).
+Search evaluator: 1024 pupil
 rings, dr 20 nm, dz 50 nm. Final scores: reference evaluator (2048 rings, dr
 10 nm, dz 12.5 nm) with the lateral CRLB, nominal and high background.
 
@@ -20,7 +24,7 @@ the comparison is not new-family-with-more-search against old-family-with-less:
 Order ablation: the best order-6 mask truncated to order 4 and to order 2
 (paraxial defocus + piston) and re-polished (sigma 0.05, 8000 evaluations, 2 seeds).
 
-Writes docs/zoned_zernike6/: results.json, best_curves.npz,
+Writes docs/zoned_zernike6/<denominator>/: results.json, best_curves.npz,
 evals_top_per_family.csv.gz (the 2000 best evaluations per family).
 
 Usage:  python scripts/zz6_search.py [--workers 4] [--quick]
@@ -53,18 +57,20 @@ from psfsim.crlb import HIGH_BACKGROUND, LateralCRLB, Photometry  # noqa: E402
 from psfsim.families import SphericalDefocus, ZonedFocus, ZonedZernikeRadial  # noqa: E402
 from psfsim.objective import Evaluator, Targets  # noqa: E402
 
-OUT = ROOT / "docs" / "zoned_zernike6"
+BASE = ROOT / "docs" / "zoned_zernike6"
+OUT = BASE / "window"  # set in main()
+DENOM = "window"
 PHASE2 = ROOT / "docs" / "phase2"
-LOG_KEYS = ["score", "ee_softmin", "ee_min", "ee_mean", "eta", "ee_flatness", "strehl_min",
+LOG_KEYS = ["score", "ee_softmin", "ee_min", "p_softmin", "p_min", "window_fraction_min", "eta", "strehl_min",
             "strehl_mean", "ee50_max_core_nm", "feasible"]
 KEEP_ROWS = 300  # best evaluations kept per run for the log
 
 _EV = None
 
 
-def _init_worker():
+def _init_worker(denom):
     global _EV
-    _EV = Evaluator(RadialPSF(n_pupil=1024, dr_nm=20.0), Targets())
+    _EV = Evaluator(RadialPSF(n_pupil=1024, dr_nm=20.0), Targets(ee_denominator=denom))
 
 
 def build_family(spec):
@@ -154,12 +160,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--quick", action="store_true", help="tiny run for testing the pipeline")
+    ap.add_argument("--denominator", choices=("window", "emitted"), default="emitted",
+                    help="EE400 as a fraction of the light inside 10 um (agreed definition) or of all emitted light")
     args = ap.parse_args()
+    global OUT, DENOM
+    DENOM = args.denominator
+    OUT = BASE / (DENOM + ("_quick" if args.quick else ""))
     OUT.mkdir(parents=True, exist_ok=True)
     q = args.quick
     b = 0.03 if q else 1.0
     t0 = time.time()
-    search = Evaluator(RadialPSF(n_pupil=1024, dr_nm=20.0), Targets())
+    search = Evaluator(RadialPSF(n_pupil=1024, dr_nm=20.0), Targets(ee_denominator=DENOM))
 
     new_specs = [("zz", 3, 6), ("zz", 4, 6)]
     ctl_specs = [("zf", n, sw) for n in (3, 4) for sw in (False, True)]
@@ -178,6 +189,14 @@ def main():
                 for sig in (0.05, 0.15):
                     tasks.append((spec, 200 + k, int(6000 * b), list(u), sig, f"warm:{src.name}", 1))
                     k += 1
+        # the optima of the other objective are starting points too
+        other = BASE / ("window" if DENOM == "emitted" else "emitted") / "results.json"
+        if other.exists() and not q:
+            runs = json.loads(other.read_text())["configs"][fam.name]["runs"]
+            for r in distinct_best([{"best_score": r["score"], "best_x": r["x"]} for r in runs], 3):
+                u = (np.array(r["best_x"]) - fam.lo) / (fam.hi - fam.lo)
+                tasks.append((spec, 200 + k, int(6000 * b), list(u), 0.1, "warm:other-objective", 1))
+                k += 1
     for spec in ctl_specs:
         fam = build_family(spec)
         tasks += [(spec, 100 + s, int(12000 * b), None, 0.3, "cold-long", 3) for s in range(2 if q else 8)]
@@ -187,7 +206,7 @@ def main():
     print(f"stage 1: {len(tasks)} CMA-ES runs, {args.workers} workers", flush=True)
 
     results = []
-    with Pool(args.workers, initializer=_init_worker) as pool:
+    with Pool(args.workers, initializer=_init_worker, initargs=(DENOM,)) as pool:
         run_pool(pool, tasks, results, "stage 1", t0)
 
         # polish the best distinct runs of the new family
@@ -227,7 +246,7 @@ def main():
             w.writerows(sorted(fam_rows, key=lambda r: -r["score"])[:2000])
 
     # ---- reference re-scoring ------------------------------------------------------
-    ref = Evaluator(RadialPSF(n_pupil=2048, dr_nm=10.0), Targets(dz_nm=12.5))
+    ref = Evaluator(RadialPSF(n_pupil=2048, dr_nm=10.0), Targets(dz_nm=12.5, ee_denominator=DENOM))
     crlb_hi = LateralCRLB(Photometry(**{**HIGH_BACKGROUND.__dict__}))
     p2 = json.loads((PHASE2 / "results.json").read_text())["configs"]
 
@@ -252,15 +271,16 @@ def main():
         # runs and keep the best one that is still feasible on the reference
         cands = [full(fam, np.array(r["best_x"])) + (r,) for r in distinct_best(runs, 8)]
         if name in p2:  # the Phase 2 optimum stays a candidate for its own family
-            cands.append(full(fam, np.array(p2[name]["x"])) + (
-                {"source": "phase2", "best_score": p2[name]["search_score"]},))
+            e2, c2 = full(fam, np.array(p2[name]["x"]))
+            cands.append((e2, c2, {"source": "phase2", "best_score": float(
+                search.evaluate_mask(*fam.mask(p2[name]["x"]))["score"])}))
         e, cur, r = max(cands, key=lambda c: c[0]["score"])
         e.update({"best_source": r["source"], "search_score": r["best_score"],
                   "runs": [{"source": x["source"], "seed": x["seed"], "score": x["best_score"],
                             "n_evals": x["n_evals"], "x": x["best_x"]} for x in
                            sorted(runs, key=lambda x: -x["best_score"])]})
-        if name in p2:
-            e["phase2_score"] = p2[name]["score"]
+        if name in p2:  # the Phase 2 optimum under this run's objective
+            e["phase2_score"] = e2["score"]
         summary[name], curves[name] = e, cur
     # references re-scored here so that every curve comes from the same evaluator
     for name, fam, x in [("spherical+defocus", SphericalDefocus(), p2["spherical+defocus"]["x"]),
@@ -276,7 +296,7 @@ def main():
     curves["no mask"].update({"curve_crlb_highbg_nm": c_hi, "phase_rho": ref.rad.rho,
                               "phase_waves": np.zeros(ref.rad.n_pupil)})
 
-    cols = ["score", "ee_softmin", "ee_min", "ee_mean", "eta", "ee_flatness", "strehl_min",
+    cols = ["score", "p_softmin", "p_min", "ee_softmin", "ee_min", "window_fraction_min", "eta", "strehl_min",
             "ee50_max_core_nm", "crlb_max_nm", "crlb_max_highbg_nm", "feasible"]
     order = sorted(summary, key=lambda k: -summary[k]["score"])
     print("\n| configuration | dim | " + " | ".join(cols) + " | found by |")
@@ -291,7 +311,7 @@ def main():
         if "mask" in summary[k]:
             print(f"  {k}: {summary[k]['mask']}")
 
-    js = {"targets": ref.describe(), "n_evals": n_evals, "configs": summary, "order": order,
+    js = {"targets": ref.describe(), "ee_denominator": DENOM, "n_evals": n_evals, "configs": summary, "order": order,
           "runtime_s": time.time() - t0}
     (OUT / "results.json").write_text(json.dumps(js, indent=2, default=float))
     np.savez_compressed(OUT / "best_curves.npz", **{f"{k}__{kk}": v for k, c in curves.items() for kk, v in c.items()})

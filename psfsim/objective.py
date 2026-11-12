@@ -24,6 +24,20 @@ and the harmonic mean (p = -1), and is smooth, so gradient and CMA-type
 optimisers see progress before the single worst plane moves. p = -10 is the
 default: a plane at half the level of the rest is weighted ~1000x more.
 
+EE denominator
+--------------
+EE400 = P(r_opt) / P(total_radius = 10 um) is a ratio inside a finite window, so
+a mask can raise it by pushing light OUT of the window (a zone defocused by more
+than ~7 um spreads its light beyond 10 um): the denominator shrinks, the core
+does not gain. The Phase 2 families could not do this (zone depths bounded at
++-4 um); families with free per-zone Zernikes can, and CMA-ES finds it (see
+docs/zoned_zernike6_report.md). `Targets.ee_denominator = "emitted"` scores
+P(r_opt) as a fraction of ALL the light through the pupil instead, which cannot
+be gamed; "window" (default) is the agreed Phase 1-2 definition. Both soft-mins
+are always reported (`ee_softmin`: window, `p_softmin`: emitted), together with
+`window_fraction_min` = min_z P(10 um), which is ~0.95-0.99 for a mask that keeps
+its light.
+
 Thresholds
 ----------
 S_min = 0.03, no EE50 cap, target EE400 floor 0.15-0.19 (agreed 2026-11-08;
@@ -73,6 +87,13 @@ class Targets:
     ee50_range_nm: tuple[float, float] = (-2000.0, 2000.0)
     softmin_p: float = -10.0
     penalty: float = 2.0  # weight on relative constraint violation in `score`
+    # What the scored encircled energy is a fraction of: "window" = the light inside
+    # total_radius (EE400 as agreed), "emitted" = all the light through the pupil.
+    ee_denominator: str = "window"
+
+    def __post_init__(self) -> None:
+        if self.ee_denominator not in ("window", "emitted"):
+            raise ValueError("ee_denominator must be 'window' or 'emitted'")
 
     @property
     def z_nm(self) -> np.ndarray:
@@ -115,6 +136,10 @@ class Evaluator:
             "ee_mean": float(ee.mean()),
             "ee_flatness": float(ee.min() / ee.mean()),
             "ee_cv": float(ee.std() / ee.mean()),
+            "p_softmin": soft_min(p, t.softmin_p, self._w),
+            "p_min": float(p.min()),
+            "p_mean": float(p.mean()),
+            "window_fraction_min": float(m["total_power"].min()),
             "eta": float(np.trapezoid(p, self.z) / self.budget_p),
             "strehl_min": float(s.min()),
             "strehl_mean": float(s.mean()),
@@ -126,7 +151,8 @@ class Evaluator:
                if np.isfinite(t.r_max_nm) else 0.0)
         out["violation"] = v_s + v_r
         out["feasible"] = out["violation"] == 0.0
-        out["score"] = out["ee_softmin"] - t.penalty * out["violation"]
+        objective = out["p_softmin"] if t.ee_denominator == "emitted" else out["ee_softmin"]
+        out["score"] = objective - t.penalty * out["violation"]
         if with_crlb:
             c = self.crlb.sigma_x(self.rad.r_nm, inten)
             out["crlb_max_nm"] = float(c.max())
